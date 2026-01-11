@@ -1,5 +1,50 @@
-  
+## 快速启动
 
+### 1) 配置环境变量
+复制一份配置文件：
+
+```bash
+cp .env.example .env
+```
+
+至少需要配置：
+- `ARK_API_KEY`：火山方舟 API Key
+- `ARK_MODEL`：例如 `doubao-seed-1-8-251228`
+- `REDIS_URL`：例如 `redis://localhost:6379/0`
+
+### 2) 启动依赖（Redis）
+本项目默认使用本地 Redis（你也可以换成云 Redis）。
+
+```bash
+docker run --rm -p 6379:6379 redis:7-alpine
+```
+
+### 3) 安装依赖并启动服务
+```bash
+uv sync
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### 4) 端到端脚本（本地调试）
+```bash
+python tests/manual_e2e.py
+```
+
+## 架构（分层）
+
+- 第一层：数据接入与事实缓存层（只写 Redis，不调用大模型）
+- 第二层：阶段性智能处理层（后台调度，从 Redis 读事实 -> 调 LLM -> 写回 Redis）
+- 第三层：课后整合与报告生成层（课堂结束后触发，生成最终总结/结构化结果）
+
+## 对外接口
+
+- HTTP：`POST /api/v1/classroom/open` 开启课堂
+- WS：`/api/v1/classroom/realtime` 实时课堂数据接入（当前支持 mock_text 调试）
+- HTTP：`POST /api/v1/classroom/end` 结束课堂（异步生成 final_report）
+- HTTP：`POST /api/v1/agent/command` 指令入口（LLM 生成回复，经 WS 推送）
+- WS：`/api/v1/ws/{session_id}` 订阅推送事件（im_request / final_report_ready 等）
+- 查询：`GET /api/v1/classroom/{session_id}/stage_summaries`
+- 查询：`GET /api/v1/classroom/{session_id}/final_report`
 
 ## 项目结构
 
@@ -9,43 +54,31 @@ ai-tutor-agent2/
 └── app/
     ├── main.py             # FastAPI 入口
     ├── api/                # 对外 HTTP / WS 接口
-    │   ├── ingest.py       # 被动监听：接收课堂数据
-    │   ├── command.py      # 主动任务：教师指令入口
-    │   ├── summary.py      # 课后总结 / 知识点抽取入口
-    │   ├── report.py       # 课堂表现报告入口
-    │   ├── homework.py     # 作业批改接口（文本 / 图片）
+    │   ├── classroom.py    # 课堂三接口：open / realtime(ws) / end + 查询
+    │   ├── agent.py        # 指令接口：/agent/command
     │   └── ws.py           # WebSocket：推送 agent 事件
     ├── core/               # 核心运行时
-    │   ├── app_context.py  # 全局上下文（state + dispatcher + event_bus）
+    │   ├── app_context.py  # 全局上下文（session + redis + scheduler + event_bus）
+    │   ├── settings.py     # 配置（ENV/.env）
+    │   ├── schedulers.py   # 阶段性总结调度器
+    │   ├── summarization.py# 基于 LLM 的阶段/课后总结
+    │   ├── asr_client.py   # ASR WS 客户端（TODO 占位）
+    │   └── classroom_session_manager.py # 会话管理器（内存）
     │   ├── event_bus.py    # 会话内事件总线（推送给 WS）
-    │   ├── state_manager.py# Session 状态与时间轴
-    │   └── task_dispatcher.py # 任务调度器（模式切换、子 agent 调用）
-    ├── agents/             # 各子智能体（AgentScope）
-    │   ├── summarizer.py       # Lesson Summarizer
-    │   ├── dictation.py        # Dictation Agent（骨架）
-    │   ├── grader.py           # Homework Grader
-    │   ├── observer.py         # Classroom Observer
-    │   ├── proctor.py          # Proctor Agent（监考骨架，TODO: YOLOv8）
-    │   ├── knowledge_extractor.py # Knowledge Extractor
-    │   └── question_gen.py     # Question Generator（TODO: LLM 出题）
-    ├── multimodal/         # 多模态缓存（目前辅助用）
-    │   ├── text_buffer.py
-    │   ├── audio_buffer.py
-    │   └── video_buffer.py
+    ├── infra/              # 基础设施适配（Redis）
+    │   └── redis_fact_store.py
+    ├── llm/                # LLM 调用层（火山方舟）
+    │   └── ark_client.py
     └── schema/             # 所有 API / 内部事件的结构定义（Pydantic）
-        ├── ingest.py
-        ├── command.py
-        ├── summary.py
-        ├── report.py
-        ├── homework.py
+        ├── classroom.py
+        ├── agent_command.py
+        └── classroom_queries.py
         └── events.py
 ```
 
-## 核心思想：
+## 说明
 
-- 按 session_id 管理一节课的完整时间轴与内部状态。
-- 被动监听层只负责 缓存与轻量结构化 ，不做重推理。
-- 教师通过 IM 或 HTTP 显式发指令时，任务调度器切换到 主动高频推理模式 ，调度各子 AgentScope 智能体。
+README 后半部分的旧版 ingest/command/summary/report 设计已被新的三层架构替代，后续会逐步清理。
 
 
 
@@ -469,6 +502,5 @@ return ReActAgent(
 ```
 - 再从 LLM 返回中用正则提取 JSON 并 json.loads ，如果解析失败就回退到规则版 summarizer + 简单的知识点抽取。
 ```
-
 
 
