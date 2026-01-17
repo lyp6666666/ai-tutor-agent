@@ -14,7 +14,12 @@ from app.schema.ingest import IngestEvent
 from app.schema.report import ReportRequest, ReportResponse
 from app.schema.summary import SummaryRequest, SummaryResponse
 
-
+"""
+    任务调度器类，负责根据事件类型调用相应的处理器。
+        
+    每个会话都有一个独立的任务状态，用于记录当前正在执行的任务。
+    任务调度器会根据事件类型和任务状态，调用不同的处理器进行处理。
+"""
 class TaskDispatcher:
     def __init__(
         self,
@@ -31,6 +36,13 @@ class TaskDispatcher:
         self.observer = observer
         self.grader = grader
 
+    """
+        处理事件的入口方法
+        
+        1. 根据事件类型和任务状态，调用不同的处理器进行处理
+        2. 将处理器的输出事件添加到输出列表中
+        3. 返回输出事件列表
+    """
     async def on_event(self, event: IngestEvent) -> list[EmittedEvent]:
         session = await self.state_manager.get_session(event.session_id)
 
